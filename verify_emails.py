@@ -20,12 +20,9 @@ from dotenv import load_dotenv
 # -----------------------
 load_dotenv()
 FROM_EMAIL = os.getenv("FROM_EMAIL")
-PASSWORD = os.getenv("EMAIL_PASSWORD")
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.hostinger.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 
-if not all([FROM_EMAIL, PASSWORD]):
-    raise ValueError("FROM_EMAIL and EMAIL_PASSWORD must be set in your .env file.")
+if not FROM_EMAIL:
+    raise ValueError("FROM_EMAIL must be set in your .env file.")
 
 
 # -----------------------
@@ -91,9 +88,6 @@ def smtp_check(email, from_addr):
             server.helo() # Use HELO for unauthenticated check
             server.mail(from_addr)
             code, _ = server.rcpt(email)
-            
-            # Note: A 250 code means the user is valid or the server is a catch-all.
-            # A code in the 500s means the user is definitively invalid.
             return code == 250
 
     except (smtplib.SMTPException, socket.timeout, ConnectionRefusedError, OSError) as e:
@@ -104,7 +98,7 @@ def smtp_check(email, from_addr):
 # -----------------------
 # Analyzer
 # -----------------------
-def analyze_email(email, from_addr, password, cache):
+def analyze_email(email, from_addr, cache):
     """Analyzes a single email using a more accurate two-step SMTP check."""
     result = {
         "email": email, "syntax_valid": False, "mx_valid": False,
@@ -138,7 +132,7 @@ def analyze_email(email, from_addr, password, cache):
         return result
 
     # --- Step 3: Advanced Two-Step SMTP Verification ---
-    user_check_result = smtp_check(email, from_addr, password)
+    user_check_result = smtp_check(email, from_addr)
     
     if user_check_result is False:
         # The server explicitly rejected the user. This is a definitive "Invalid".
@@ -151,10 +145,9 @@ def analyze_email(email, from_addr, password, cache):
 
     elif user_check_result is True:
         # The server accepted the user, but we must check if it's a catch-all.
-        # We perform a second check with a bogus email address.
         bogus_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=15))
         bogus_email = f"{bogus_user}@{domain}"
-        bogus_check_result = smtp_check(bogus_email, from_addr, password)
+        bogus_check_result = smtp_check(bogus_email, from_addr)
 
         if bogus_check_result is True:
             # Server accepted the real AND the bogus email -> CATCH-ALL
@@ -172,4 +165,3 @@ def analyze_email(email, from_addr, password, cache):
 
     print(f"Processed: {email:<40} -> Status: {result['status']}")
     return result
-
