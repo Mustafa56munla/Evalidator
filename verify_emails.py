@@ -75,23 +75,30 @@ def domain_has_mail_server(domain):
         return False
 
 
-def smtp_check(email, from_addr, password):
-    """Performs the final SMTP check to see if a user exists."""
-    time.sleep(random.uniform(0.5, 1.5))  # Add a polite delay
+def smtp_check(email, from_addr):
+    """
+    Performs an SMTP check by connecting to the recipient's MX server on port 25.
+    This version does not log in, simulating a standard server-to-server mail transfer.
+    """
+    time.sleep(random.uniform(0.5, 1.5)) # Add a polite delay
     try:
         domain = email.split('@')[1]
         mx_records = dns.resolver.resolve(domain, 'MX')
         mx_host = str(mx_records[0].exchange).rstrip('.')
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10)
-        server.starttls()
-        server.login(from_addr, password)
-        server.mail(from_addr)
-        code, _ = server.rcpt(email)
-        server.quit()
-        return code == 250
-    except (smtplib.SMTPException, socket.timeout, ConnectionRefusedError) as e:
+
+        # Connect on port 25, the standard for MTA-to-MTA communication
+        with smtplib.SMTP(host=mx_host, port=25, timeout=10) as server:
+            server.helo() # Use HELO for unauthenticated check
+            server.mail(from_addr)
+            code, _ = server.rcpt(email)
+            
+            # Note: A 250 code means the user is valid or the server is a catch-all.
+            # A code in the 500s means the user is definitively invalid.
+            return code == 250
+
+    except (smtplib.SMTPException, socket.timeout, ConnectionRefusedError, OSError) as e:
         print(f"SMTP check failed for {email}: {type(e).__name__}")
-        return None
+        return None # Indicate the check could not be completed
 
 
 # -----------------------
@@ -165,3 +172,4 @@ def analyze_email(email, from_addr, password, cache):
 
     print(f"Processed: {email:<40} -> Status: {result['status']}")
     return result
+
