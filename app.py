@@ -1,10 +1,12 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
 import os
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import the core functions from your original script
+# Import the core functions from your logic script
 from verify_emails import (
     get_disposable_domains,
     analyze_email
@@ -16,36 +18,34 @@ st.set_page_config(page_title="Email Validator", layout="centered")
 # Load secrets: Works locally with .env and on Streamlit Cloud with st.secrets
 try:
     FROM_EMAIL = st.secrets["FROM_EMAIL"]
-    PASSWORD = st.secrets["EMAIL_PASSWORD"]
-except FileNotFoundError:
+except (FileNotFoundError, KeyError):
     load_dotenv()
     FROM_EMAIL = os.getenv("FROM_EMAIL")
-    PASSWORD = os.getenv("EMAIL_PASSWORD")
 
-if not all([FROM_EMAIL, PASSWORD]):
-    st.error("FATAL: Email credentials are not configured. App cannot run.")
+if not FROM_EMAIL:
+    st.error("FATAL: FROM_EMAIL is not configured. Add it to your .env file or Streamlit Secrets.")
     st.stop()
 
 # --- Reusable Data & Cache ---
-# Use Streamlit's cache to load disposable domains only once
 @st.cache_resource
 def load_disposable_list():
+    """Loads the disposable domain list and caches it."""
     return get_disposable_domains()
 
 DISPOSABLE_DOMAINS = load_disposable_list()
-domain_cache = {} # A simple cache for the session
+domain_cache = {} # A simple in-memory cache for the session
 
 # --- Main App UI ---
 st.title("📧 Email Verification Tool")
 
-# --- NEW: Single Email Verification ---
+# --- Single Email Verification ---
 st.subheader("Verify a Single Email")
 single_email = st.text_input("Enter one email address to verify:", placeholder="example@domain.com")
 
 if st.button("Verify Email"):
     if single_email:
         with st.spinner(f"Verifying {single_email}..."):
-            result = analyze_email(single_email, FROM_EMAIL, PASSWORD, domain_cache)
+            result = analyze_email(single_email, FROM_EMAIL, domain_cache)
         
         status = result.get("status", "Unknown")
         send_decision = result.get("send", "Don't Send")
@@ -57,13 +57,12 @@ if st.button("Verify Email"):
         else:
             st.error(f"**Status: {status}** ({send_decision})")
         
-        # Display the full details in an expandable section
         with st.expander("Show full details"):
             st.json(result)
     else:
         st.warning("Please enter an email address in the box.")
 
-# --- Existing: CSV File Verification ---
+# --- CSV File Verification ---
 st.subheader("Or, Verify a Full CSV File")
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
@@ -81,7 +80,7 @@ if uploaded_file is not None:
             progress_bar = st.progress(0, text="Starting verification...")
             
             with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(analyze_email, email, FROM_EMAIL, PASSWORD, domain_cache): email for email in email_list}
+                futures = {executor.submit(analyze_email, email, FROM_EMAIL, domain_cache): email for email in email_list}
                 
                 for i, future in enumerate(as_completed(futures)):
                     results.append(future.result())
