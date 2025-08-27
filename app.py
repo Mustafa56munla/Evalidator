@@ -64,6 +64,7 @@ if st.button("Verify Email"):
 
 # --- CSV File Verification ---
 st.subheader("Or, Verify a Full CSV File")
+st.subheader("Example:")
 
 # NEW: Add instructions for the CSV format
 with st.info("Your CSV file must contain a single column with the header name `email`.", icon="ℹ️"):
@@ -111,4 +112,5 @@ if uploaded_file is not None:
                mime="text/csv",
             )
             st.dataframe(results_df)
+
 
