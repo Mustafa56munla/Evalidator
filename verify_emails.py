@@ -73,25 +73,74 @@ def domain_has_mail_server(domain):
     except dns.resolver.Timeout:
         return False
 
+def analyze_email(email, from_addr, password, cache):
+    """Analyzes a single email using a more accurate two-step SMTP check."""
+    result = {
+        "email": email, "syntax_valid": False, "mx_valid": False,
+        "is_disposable": False, "is_catch_all": False, "smtp_valid": None,
+        "status": "Unprocessed", "send": "Don't Send", "tested_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
-def is_catch_all(domain, from_addr, password):
-    """Checks if a domain is a catch-all by probing with a random email address."""
-    time.sleep(random.uniform(0.5, 1.5))  # Add a polite delay
-    try:
-        mx_records = dns.resolver.resolve(domain, 'MX')
-        mx_host = str(mx_records[0].exchange).rstrip('.')
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10)
-        server.starttls()
-        server.login(from_addr, password)
-        server.mail(from_addr)
-        fake_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=15))
-        code, _ = server.rcpt(f"{fake_user}@{domain}")
-        server.quit()
-        return code == 250
-    except (smtplib.SMTPException, socket.timeout, ConnectionRefusedError, dns.resolver.NoAnswer,
-            dns.resolver.NXDOMAIN) as e:
-        print(f"Catch-all check failed for {domain}: {type(e).__name__}")
-        return False
+    # --- Step 1: Basic Checks (Syntax, Disposable) ---
+    if not is_valid_syntax(email):
+        result["status"] = "Invalid Syntax"
+        return result
+    result["syntax_valid"] = True
+
+    domain = email.split('@')[1].lower()
+
+    if domain in DISPOSABLE_DOMAINS:
+        result["is_disposable"] = True
+        result["status"] = "Disposable"
+        return result
+
+    # --- Step 2: Domain & MX Record Check (with Cache) ---
+    if domain in cache:
+        result["mx_valid"] = cache[domain]["mx_valid"]
+    else:
+        mx_ok = domain_has_mail_server(domain)
+        result["mx_valid"] = mx_ok
+        cache[domain] = {"mx_valid": mx_ok}
+
+    if not result["mx_valid"]:
+        result["status"] = "No Mail Server (MX/A Record)"
+        return result
+
+    # --- Step 3: Advanced Two-Step SMTP Verification ---
+    user_check_result = smtp_check(email, from_addr, password)
+    
+    if user_check_result is False:
+        # The server explicitly rejected the user. This is a definitive "Invalid".
+        result["smtp_valid"] = False
+        result["status"] = "Invalid (Rejected by SMTP)"
+
+    elif user_check_result is None:
+        # The check failed due to a network error or timeout.
+        result["status"] = "Unverifiable (SMTP Error)"
+
+    elif user_check_result is True:
+        # The server accepted the user, but we must check if it's a catch-all.
+        # We perform a second check with a bogus email address.
+        bogus_user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=15))
+        bogus_email = f"{bogus_user}@{domain}"
+        bogus_check_result = smtp_check(bogus_email, from_addr, password)
+
+        if bogus_check_result is True:
+            # Server accepted the real AND the bogus email -> CATCH-ALL
+            result["is_catch_all"] = True
+            result["status"] = "Catch-all"
+            result["send"] = "Send with caution"
+        elif bogus_check_result is False:
+            # Server accepted the real but rejected the bogus email -> VALID
+            result["smtp_valid"] = True
+            result["status"] = "Valid"
+            result["send"] = "Send"
+        else:
+            # Bogus check had an error, so the result is uncertain.
+            result["status"] = "Unverifiable (SMTP Error during catch-all check)"
+
+    print(f"Processed: {email:<40} -> Status: {result['status']}")
+    return result
 
 
 def smtp_check(email, from_addr, password):
@@ -209,4 +258,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
