@@ -1,13 +1,11 @@
-# app.py (Final Hybrid Streamlit Version)
+# app.py
 
 import streamlit as st
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 
-# Import all necessary functions from your logic script
 from verify_emails import get_disposable_domains, analyze_email, verify_with_mailbite_api
 
-# --- App Configuration & Secrets ---
 st.set_page_config(page_title="Email Validator", layout="centered")
 
 try:
@@ -18,8 +16,7 @@ try:
 except (FileNotFoundError, KeyError):
     st.error("FATAL: Required secrets are not set in Streamlit Cloud.")
     st.stop()
-
-# --- Password Protection ---
+    
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -37,46 +34,38 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- Main Verification Logic ---
+@st.cache_resource
+def load_disposable_list():
+    return get_disposable_domains()
+
+DISPOSABLE_DOMAINS = load_disposable_list()
+
 def run_full_verification(email_list, api_keys_str):
-    """Runs the full hybrid verification process."""
     domain_cache = {}
-    
-    # Stage 1: Initial local verification
     with ThreadPoolExecutor(max_workers=4) as executor:
         initial_results = list(executor.map(lambda email: analyze_email(email, FROM_EMAIL, PASSWORD, domain_cache), email_list))
-
-    # Stage 2: Automatic API check for Catch-alls
     catch_all_results = [res for res in initial_results if res['status'] == 'Catch-all']
     api_keys = api_keys_str.split(',') if api_keys_str else []
-
     if catch_all_results and api_keys:
         available_keys = list(api_keys)
         for result_item in initial_results:
             if result_item['status'] == 'Catch-all':
                 if not available_keys:
                     result_item['status'] = "API Keys Exhausted"; continue
-                
                 current_key = available_keys[0]
                 api_result = verify_with_mailbite_api(result_item['email'], current_key)
-
                 if api_result.get("key_exhausted"):
-                    available_keys.pop(0) # Remove exhausted key
-                    if available_keys: # Retry with the next key
+                    available_keys.pop(0)
+                    if available_keys:
                         api_result = verify_with_mailbite_api(result_item['email'], available_keys[0])
                     else:
                         result_item['status'] = "API Keys Exhausted"; continue
-                
-                # Update status based on API result
                 result_item['status'] = api_result["status"]
                 if "Valid" in result_item['status']: result_item['send'] = "Send"
                 elif "Invalid" in result_item['status']: result_item['send'] = "Don't Send"
-
     return initial_results
 
-# --- Main App UI ---
 st.title("📧 Hybrid Email Verification Tool")
-
 with st.expander("How this tool works"):
     st.write("""
         This tool performs a two-stage verification:
@@ -97,14 +86,11 @@ if uploaded_file is not None:
     else:
         email_list = df['email'].dropna().unique().tolist()
         st.success(f"File uploaded successfully! Found {len(email_list)} unique emails.")
-
         if st.button(f"🚀 Start Full Verification for {len(email_list)} Emails"):
             with st.spinner("Performing verification... This may take several minutes."):
                 final_results = run_full_verification(email_list, MAILBITE_API_KEYS_STR)
-            
             st.success("✅ Verification Complete!")
             results_df = pd.DataFrame(final_results)
             csv_output = results_df.to_csv(index=False).encode('utf-8')
-            
             st.download_button(label="📥 Download Final Results", data=csv_output, file_name=f"verified_{uploaded_file.name}", mime="text/csv")
             st.dataframe(results_df)
