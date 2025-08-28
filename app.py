@@ -65,12 +65,12 @@ def run_full_verification(email_list, api_keys_str):
                 elif "Invalid" in result_item['status']: result_item['send'] = "Don't Send"
     return initial_results
 
-st.title("📧 Hybrid Email Verification Tool")
+st.title("Az Evalidator")
 with st.expander("How this tool works"):
     st.write("""
         This tool performs a two-stage verification:
         1.  **Initial Check:** A fast, local check filters out invalid, disposable, and easily verifiable emails.
-        2.  **API Check:** Any emails marked as "Catch-all" are automatically re-verified using the Mailbite API for the highest possible accuracy.
+        2.  **API Check:** Any emails marked as "Catch-all" are automatically re-verified using API in a better IP Reputation for higher accuracy.
     """)
 
 st.subheader("Verify a CSV File")
@@ -94,3 +94,4 @@ if uploaded_file is not None:
             csv_output = results_df.to_csv(index=False).encode('utf-8')
             st.download_button(label="📥 Download Final Results", data=csv_output, file_name=f"verified_{uploaded_file.name}", mime="text/csv")
             st.dataframe(results_df)
+
