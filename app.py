@@ -2,12 +2,12 @@
 
 import streamlit as st
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
-
+import time
 from verify_emails import get_disposable_domains, analyze_email, verify_with_mailbite_api
 
 st.set_page_config(page_title="Email Validator", layout="centered")
 
+# Load secrets
 try:
     FROM_EMAIL = st.secrets["FROM_EMAIL"]
     PASSWORD = st.secrets["EMAIL_PASSWORD"]
@@ -16,7 +16,8 @@ try:
 except (FileNotFoundError, KeyError):
     st.error("FATAL: Required secrets are not set in Streamlit Cloud.")
     st.stop()
-    
+
+# Password protection
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -34,37 +35,52 @@ def check_password():
 if not check_password():
     st.stop()
 
+# Load disposable email list
 @st.cache_resource
 def load_disposable_list():
     return get_disposable_domains()
 
 DISPOSABLE_DOMAINS = load_disposable_list()
 
-def run_full_verification(email_list, api_keys_str):
+# Full email verification function with progress
+def run_full_verification(email_list, api_keys_str, progress_callback=None):
     domain_cache = {}
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        initial_results = list(executor.map(lambda email: analyze_email(email, FROM_EMAIL, PASSWORD, domain_cache), email_list))
-    catch_all_results = [res for res in initial_results if res['status'] == 'Catch-all']
+    results = []
+    total = len(email_list)
+    for i, email in enumerate(email_list, start=1):
+        result = analyze_email(email, FROM_EMAIL, PASSWORD, domain_cache)
+        results.append(result)
+        if progress_callback:
+            progress_callback(i, total, result)
+        time.sleep(0.05)  # brief delay for UI responsiveness
+
+    # Optional: API fallback for catch-all
+    catch_all_results = [res for res in results if res['status'] == 'Catch-all']
     api_keys = api_keys_str.split(',') if api_keys_str else []
     if catch_all_results and api_keys:
         available_keys = list(api_keys)
-        for result_item in initial_results:
-            if result_item['status'] == 'Catch-all':
+        for res in results:
+            if res['status'] == 'Catch-all':
                 if not available_keys:
-                    result_item['status'] = "API Keys Exhausted"; continue
+                    res['status'] = "API Keys Exhausted"
+                    continue
                 current_key = available_keys[0]
-                api_result = verify_with_mailbite_api(result_item['email'], current_key)
+                api_result = verify_with_mailbite_api(res['email'], current_key)
                 if api_result.get("key_exhausted"):
                     available_keys.pop(0)
                     if available_keys:
-                        api_result = verify_with_mailbite_api(result_item['email'], available_keys[0])
+                        api_result = verify_with_mailbite_api(res['email'], available_keys[0])
                     else:
-                        result_item['status'] = "API Keys Exhausted"; continue
-                result_item['status'] = api_result["status"]
-                if "Valid" in result_item['status']: result_item['send'] = "Send"
-                elif "Invalid" in result_item['status']: result_item['send'] = "Don't Send"
-    return initial_results
+                        res['status'] = "API Keys Exhausted"
+                        continue
+                res['status'] = api_result["status"]
+                if "Valid" in res['status']:
+                    res['send'] = "Send"
+                elif "Invalid" in res['status']:
+                    res['send'] = "Don't Send"
+    return results
 
+# UI layout
 st.title("🚀Az Evalidator🚀")
 with st.expander("How this tool works"):
     st.write("""
@@ -86,13 +102,26 @@ if uploaded_file is not None:
     else:
         email_list = df['email'].dropna().unique().tolist()
         st.success(f"File uploaded successfully! Found {len(email_list)} unique emails.")
+
         if st.button(f"🚀 Start Full Verification for {len(email_list)} Emails"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            preview_box = st.empty()
+            results_preview = []
+
+            def update_progress(count, total, result):
+                percent = int(count / total * 100)
+                progress_bar.progress(percent)
+                status_text.info(f"Verifying: {result['email']} ({count}/{total}) → {result['status']}")
+                if count % 10 == 0 or count == total:
+                    preview_box.dataframe(pd.DataFrame(results_preview[-10:]))
+                results_preview.append(result)
+
             with st.spinner("Performing verification... This may take several minutes."):
-                final_results = run_full_verification(email_list, MAILBITE_API_KEYS_STR)
+                final_results = run_full_verification(email_list, MAILBITE_API_KEYS_STR, progress_callback=update_progress)
+
             st.success("✅ Verification Complete!")
             results_df = pd.DataFrame(final_results)
             csv_output = results_df.to_csv(index=False).encode('utf-8')
             st.download_button(label="📥 Download Final Results", data=csv_output, file_name=f"verified_{uploaded_file.name}", mime="text/csv")
             st.dataframe(results_df)
-
-
